@@ -2,7 +2,9 @@
 
 namespace h4kuna\Fio\Account;
 
-class FioAccount
+use Stringable;
+
+class FioAccount implements Stringable
 {
 	private Bank $account;
 
