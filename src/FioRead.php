@@ -85,7 +85,7 @@ class FioRead
 	}
 
 
-	private function download(string $apiUrl, string ...$args): ResponseInterface
+	public function download(string $apiUrl, string ...$args): ResponseInterface
 	{
 		$token = $this->account->getToken();
 		$requestUrl = Utils\Fio::REST_URL . sprintf($apiUrl, $token, ...$args);
