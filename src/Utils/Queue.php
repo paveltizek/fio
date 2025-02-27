@@ -2,11 +2,10 @@
 
 namespace h4kuna\Fio\Utils;
 
-use h4kuna\Dir\TempDir;
+use h4kuna\Fio\Contracts\RequestBlockingServiceContract;
 use h4kuna\Fio\Exceptions;
 use h4kuna\Fio\Pay\Response;
 use h4kuna\Fio\Pay\XMLResponse;
-use Nette\SafeStream;
 use Nette\Utils\Strings;
 use Psr\Http\Client\ClientExceptionInterface;
 use Psr\Http\Client\ClientInterface;
@@ -15,25 +14,21 @@ use Psr\Http\Message\ResponseInterface;
 
 class Queue
 {
-	/** @var int [s] */
-	protected const WAIT_TIME = 30;
 	private const HEADER_CONFLICT = 409;
-
-	/** @var array<string, string> */
-	private static array $tokens = [];
-
 	private int $limitLoop = 3;
 
 
 	public function __construct(
-		private TempDir $tempDir,
 		private ClientInterface $client,
 		private FioRequestFactory $requestFactory,
-	)
-	{
+		private RequestBlockingServiceContract $requestBlockingService
+	) {
 	}
 
 
+	/**
+	 * @param positive-int $limitLoop
+	 */
 	public function setLimitLoop(int $limitLoop): void
 	{
 		$this->limitLoop = $limitLoop;
@@ -52,6 +47,9 @@ class Queue
 	}
 
 
+	/**
+	 * @throws Exceptions\ServiceUnavailable
+	 */
 	private function detectDownloadResponse(ResponseInterface $response): void
 	{
 		$contentTypeHeaders = $response->getHeader('Content-Type');
@@ -81,78 +79,39 @@ class Queue
 
 	private function request(string $token, RequestInterface $request): ResponseInterface
 	{
-		$tempFile = $this->loadFileName($token);
-		$i = 0;
-
-		request:
-		$file = self::createFileResource($tempFile);
-		++$i;
+		$request = $request->withHeader('X-Powered-By', 'h4kuna/fio');
+		$response = null;
 		try {
-			$response = $this->client->sendRequest($request->withHeader('X-Powered-By', 'h4kuna/fio'));
+			for ($i = 0; $i < $this->limitLoop && $response === null; ++$i) {
+				$response = $this->requestBlockingService->synchronize($token, function () use ($request) {
+					$response = $this->client->sendRequest($request);
 
-			if ($response->getStatusCode() === self::HEADER_CONFLICT) {
-				if ($i >= $this->limitLoop) {
-					throw new Exceptions\QueueLimit(sprintf('You have limit up requests to server "%s". Too many requests in short time interval.', $i));
-				}
-				self::sleep($tempFile);
-				goto request;
+					if ($response->getStatusCode() === self::HEADER_CONFLICT) {
+						return null;
+					}
+
+					return $response;
+				});
 			}
-
-			touch($tempFile);
-
-			return $response;
 		} catch (ClientExceptionInterface $e) {
 			$message = str_replace($token, Strings::truncate($token, 10), $e->getMessage());
 			throw new Exceptions\ServiceUnavailable($message, $e->getCode()); // in url is token, don't need keep previous exception
-		} finally {
-			fclose($file);
 		}
+
+		if ($response === null) {
+			throw new Exceptions\QueueLimit(sprintf('You have limit up requests to server "%s". Too many requests in short time interval.', $this->limitLoop));
+		}
+
+		return $response;
 	}
 
 
 	/**
-	 * @return resource
+	 * @throws Exceptions\ServiceUnavailable
 	 */
-	private static function createFileResource(string $filePath)
-	{
-		$file = fopen(self::safeProtocol($filePath), 'w');
-		if ($file === false) {
-			throw new Exceptions\InvalidState('Open file is failed ' . $filePath);
-		}
-
-		return $file;
-	}
-
-
-	private static function sleep(string $filename): void
-	{
-		$criticalTime = time() - intval(filemtime($filename));
-		if ($criticalTime < static::WAIT_TIME) {
-			sleep(static::WAIT_TIME - $criticalTime);
-		}
-	}
-
-
-	private function loadFileName(string $token): string
-	{
-		$key = substr($token, 10, -10);
-		if (!isset(self::$tokens[$key])) {
-			self::$tokens[$key] = $this->tempDir->filename(md5($key));
-		}
-
-		return self::$tokens[$key];
-	}
-
-
-	private static function safeProtocol(string $filename): string
-	{
-		return SafeStream\Wrapper::Protocol . "://$filename";
-	}
-
-
 	private function createXmlResponse(ResponseInterface $response): XMLResponse
 	{
-		return new XMLResponse($response->getBody()->getContents());
+		return new XMLResponse(Fio::getContents($response));
 	}
 
 }

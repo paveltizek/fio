@@ -66,7 +66,7 @@ class XMLFile
 
 			assert(is_scalar($value) || $value instanceof Stringable);
 			$this->xml->startElement($node);
-			$this->xml->text(strval($value));
+			$this->xml->text((string) $value);
 			$this->xml->endElement();
 		}
 		$this->xml->endElement();

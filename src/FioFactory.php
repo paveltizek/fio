@@ -4,9 +4,10 @@ namespace h4kuna\Fio;
 
 use GuzzleHttp\Client;
 use GuzzleHttp\Psr7\HttpFactory;
+use h4kuna\Dir\Dir;
 use h4kuna\Dir\TempDir;
 use h4kuna\Fio;
-use h4kuna\Fio\Account;
+use h4kuna\Fio\Contracts\RequestBlockingServiceContract;
 use Psr\Http\Client\ClientInterface;
 
 class FioFactory
@@ -15,20 +16,23 @@ class FioFactory
 
 	protected Utils\Queue $queue;
 
-	protected TempDir $tempDir;
-
 
 	/**
 	 * @param array<array{token: string, account: string}> $accounts
 	 */
 	public function __construct(
 		array $accounts,
-		string $temp = 'fio',
-	)
-	{
-		$this->tempDir = new TempDir($temp);
+		string|Dir $temp = 'fio',
+		?ClientInterface $client = null,
+		?Utils\FioRequestFactory $fioRequestFactory = null,
+	) {
+
 		$this->accountCollection = $this->createAccountCollection($accounts);
-		$this->queue = $this->createQueue();
+		$this->queue = $this->createQueue(
+			$this->createRequestBlockingService(is_string($temp) ? new TempDir($temp) : $temp),
+			$client ?? self::createClientInterface(),
+			$fioRequestFactory ?? self::createRequestFactory()
+		);
 	}
 
 
@@ -44,9 +48,14 @@ class FioFactory
 	}
 
 
-	protected function createQueue(): Utils\Queue
+	protected function createQueue(RequestBlockingServiceContract $requestBlockingService, ClientInterface $client, Utils\FioRequestFactory $fioRequestFactory): Utils\Queue
 	{
-		return new Utils\Queue($this->tempDir, $this->createClientInterface(), $this->createRequestFactory());
+		return new Utils\Queue($client, $fioRequestFactory, $requestBlockingService);
+	}
+
+	protected function createRequestBlockingService(Dir $tempDir): RequestBlockingServiceContract
+	{
+		return new Fio\Utils\FileRequestBlockingService($tempDir->create());
 	}
 
 
@@ -75,7 +84,7 @@ class FioFactory
 	}
 
 
-	private function createClientInterface(): ClientInterface
+	private static function createClientInterface(): ClientInterface
 	{
 		Fio\Exceptions\MissingDependency::checkGuzzlehttp();
 
@@ -83,7 +92,7 @@ class FioFactory
 	}
 
 
-	private function createRequestFactory(): Utils\FioRequestFactory
+	private static function createRequestFactory(): Utils\FioRequestFactory
 	{
 		Fio\Exceptions\MissingDependency::checkGuzzlehttp();
 
